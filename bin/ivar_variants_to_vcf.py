@@ -4,7 +4,8 @@ import sys
 import re
 import errno
 import argparse
-
+import math
+from scipy.stats import fisher_exact
 
 def parse_args(args=None):
     Description = "Convert iVar variants tsv file to vcf format."
@@ -28,6 +29,14 @@ def parse_args(args=None):
         default=0,
         help="Only output variants where allele frequency greater than this number (default: 0).",
     )
+    parser.add_argument(
+        "-fs",
+        "--fisher_test_thresh",
+        type=float,
+        dest="FISHER_TEST_THRESH",
+        default=-1,
+        help="Only output variants where -10.log10(p.value) of the strand bias Fisher exact test is less than the given threshold (default: -1, no filter).",
+    )
 
     return parser.parse_args(args)
 
@@ -41,7 +50,7 @@ def make_dir(path):
                 raise
 
 
-def ivar_variants_to_vcf(FileIn, FileOut, passOnly=False, minAF=0):
+def ivar_variants_to_vcf(FileIn, FileOut, passOnly=False, minAF=0, maxFS=-1):
     filename = os.path.splitext(FileIn)[0]
     header = (
         "##fileformat=VCFv4.2\n"
@@ -91,6 +100,18 @@ def ivar_variants_to_vcf(FileIn, FileOut, passOnly=False, minAF=0):
                     FILTER = "PASS"
                 else:
                     FILTER = "FAIL"
+
+                # Computing FS
+                cov_ref   = int(line[4])
+                cov_ref_rv = int(line[5])
+                cov_ref_fw = cov_ref-cov_ref_rv
+                cov_alt   = int(line[7])
+                cov_alt_rv = int(line[8])
+                cov_alt_fw = cov_alt-cov_alt_rv
+                contingency = [[cov_ref_fw,cov_ref_rv],[cov_alt_fw, cov_alt_rv]]
+                odds, pval = fisher_exact(contingency, alternative='two-sided')
+                FS = -10*math.log10(pval)
+
                 INFO = "DP=" + line[11]
                 FORMAT = "GT:REF_DP:REF_RV:REF_QUAL:ALT_DP:ALT_RV:ALT_QUAL:ALT_FREQ"
                 SAMPLE = (
@@ -132,6 +153,8 @@ def ivar_variants_to_vcf(FileIn, FileOut, passOnly=False, minAF=0):
                     + "\n"
                 )
                 writeLine = True
+                if maxFS != -1 and FS>maxFS:
+                    writeLine = False
                 if passOnly and FILTER != "PASS":
                     writeLine = False
                 if float(line[10]) < minAF:
@@ -154,7 +177,7 @@ def ivar_variants_to_vcf(FileIn, FileOut, passOnly=False, minAF=0):
 def main(args=None):
     args = parse_args(args)
     ivar_variants_to_vcf(
-        args.FILE_IN, args.FILE_OUT, args.PASS_ONLY, args.ALLELE_FREQ_THRESH
+        args.FILE_IN, args.FILE_OUT, args.PASS_ONLY, args.ALLELE_FREQ_THRESH, args.FISHER_TEST_THRESH
     )
 
 
